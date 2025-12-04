@@ -24,3 +24,4 @@ Usage of ech-win:
 
 ### 🛠 开源代码引用
 - [https://github.com/hhsw2015/ech-workers](https://github.com/hhsw2015/ech-workers)
+- [https://github.com/ahhfzwl](https://github.com/ahhfzwl)
