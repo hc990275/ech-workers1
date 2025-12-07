@@ -22,7 +22,7 @@ jobs:
         cache: false
 
     - name: Build Windows
-      run: go build -ldflags="-s -w" -o ech-win.exe ech-workers.go
+      run: go build -trimpath -ldflags="-s -w" -o ech-win.exe ech-workers.go
 
     - name: Upload Windows binary
       uses: actions/upload-artifact@v4
@@ -47,7 +47,7 @@ jobs:
 
     - name: Build Linux
       run: |
-        go build -ldflags="-s -w" -o ech-linux ech-workers.go
+        go build -trimpath -ldflags="-s -w" -o ech-linux ech-workers.go
         chmod +x ech-linux
 
     - name: Upload Linux binary
@@ -73,7 +73,7 @@ jobs:
 
     - name: Build macOS
       run: |
-        go build -ldflags="-s -w" -o ech-macos ech-workers.go
+        go build -trimpath -ldflags="-s -w" -o ech-macos ech-workers.go
         chmod +x ech-macos
 
     - name: Upload macOS binary
