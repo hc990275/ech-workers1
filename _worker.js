@@ -6,7 +6,7 @@ export default {
     async fetch(request) {
         try {
             const upgradeHeader = request.headers.get('Upgrade');
-            if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+            if (!upgradeHeader || upgradeHeader.trim().toLowerCase() !== 'websocket') {
                 return new URL(request.url).pathname === '/'
                     ? new Response('WebSocket Proxy Server', { status: 200 })
                     : new Response('Expected WebSocket', { status: 426 });
@@ -34,15 +34,20 @@ export default {
 async function handleSession(webSocket) {
     let remoteSocket, remoteWriter, remoteReader;
     let isClosed = false;
+    let isConnecting = false;
+    let connectionAttempts = 0;
+
     const cleanup = () => {
         if (isClosed) return;
         isClosed = true;
+        isConnecting = false;
         try { remoteWriter?.releaseLock(); } catch { }
         try { remoteReader?.releaseLock(); } catch { }
         try { remoteSocket?.close(); } catch { }
         remoteWriter = remoteReader = remoteSocket = null;
         safeCloseWebSocket(webSocket);
     };
+
     const pumpRemoteToWebSocket = async () => {
         try {
             while (!isClosed && remoteReader) {
@@ -51,85 +56,136 @@ async function handleSession(webSocket) {
                 if (webSocket.readyState !== 1) break;
                 if (value?.byteLength > 0) webSocket.send(value);
             }
-        } catch { }
+        } catch (err) {
+            console.error('Remote to WebSocket pump error:', err);
+            if (!isClosed && connectionAttempts < 3) {
+                connectionAttempts++;
+                try {
+                    await new Promise(resolve => setTimeout(resolve, 1000 * connectionAttempts));
+                    if (remoteSocket?.readable) {
+                        remoteReader = remoteSocket.readable.getReader();
+                        pumpRemoteToWebSocket();
+                        return;
+                    }
+                } catch { }
+            }
+        }
 
         if (!isClosed) {
             try { webSocket.send('CLOSE'); } catch { }
             cleanup();
         }
     };
+
     const parseAddress = (addr) => {
         let host, ipv6, port;
         if (addr.startsWith('[') && addr.includes(']')) {
-            [ipv6, port = 443] = addr.split(']:');
-            host = ipv6.endsWith(']') ? `${ipv6}` : `${ipv6}]`;
+            const closeBracketIndex = addr.indexOf(']');
+            ipv6 = addr.substring(0, closeBracketIndex + 1);
+            const afterBracket = addr.substring(closeBracketIndex + 1);
+            
+            if (afterBracket.startsWith(':')) {
+                port = afterBracket.substring(1);
+            } else {
+                port = 443;
+            }
+            host = ipv6;
         } else {
             [host, port = 443] = addr.split(/[:,;]/);
         }
+        
+        const parsedPort = parseInt(port, 10);
+        const finalPort = isNaN(parsedPort) ? 443 : parsedPort;
+        
         return {
             host: host,
-            port: +port
+            port: finalPort
         };
     };
+
     const isCFError = (err) => {
         const msg = err?.message?.toLowerCase() || '';
         return msg.includes('proxy request') ||
             msg.includes('cannot connect') ||
             msg.includes('cloudflare');
     };
+
     const connectToRemote = async (targetAddr, firstFrameData, proxyIP) => {
-        const original = parseAddress(targetAddr);
-        const fallbackIPs = [];
-        if (proxyIP) {
-            fallbackIPs.push(proxyIP);
+        if (isConnecting || remoteSocket) {
+            throw new Error('已有连接或正在连接中');
         }
-        const attempts = [null, ...fallbackIPs];
-        for (let i = 0; i < attempts.length; i++) {
-            let attemptHost = original.host;
-            let attemptPort = original.port;
-            if (attempts[i] !== null) {
-                const fallback = attempts[i];
-                try {
-                    const parsed = parseAddress(fallback);
-                    if (!isNaN(parsed.port)) {
-                        attemptHost = parsed.host;
-                        attemptPort = parsed.port;
-                    } else {
+        
+        isConnecting = true;
+        connectionAttempts = 0;
+        
+        try {
+            const original = parseAddress(targetAddr);
+            const fallbackIPs = [];
+            if (proxyIP) {
+                fallbackIPs.push(proxyIP);
+            }
+            const attempts = [null, ...fallbackIPs];
+            
+            for (let i = 0; i < attempts.length; i++) {
+                let attemptHost = original.host;
+                let attemptPort = original.port;
+                
+                if (attempts[i] !== null) {
+                    const fallback = attempts[i];
+                    try {
+                        const parsed = parseAddress(fallback);
+                        if (!isNaN(parsed.port)) {
+                            attemptHost = parsed.host;
+                            attemptPort = parsed.port;
+                        } else {
+                            attemptHost = fallback;
+                            attemptPort = 443;
+                        }
+                    } catch {
                         attemptHost = fallback;
                         attemptPort = 443;
                     }
-                } catch {
-                    attemptHost = fallback;
-                    attemptPort = 443;
+                }
+                
+                try {
+                    remoteSocket = connect({
+                        hostname: attemptHost,
+                        port: attemptPort
+                    });
+                    
+                    if (remoteSocket.opened) await remoteSocket.opened;
+                    
+                    remoteWriter = remoteSocket.writable.getWriter();
+                    remoteReader = remoteSocket.readable.getReader();
+                    
+                    if (firstFrameData) {
+                        await remoteWriter.write(encoder.encode(firstFrameData));
+                    }
+                    
+                    isConnecting = false;
+                    webSocket.send('CONNECTED');
+                    pumpRemoteToWebSocket();
+                    return;
+                } catch (err) {
+                    try { remoteWriter?.releaseLock(); } catch { }
+                    try { remoteReader?.releaseLock(); } catch { }
+                    try { remoteSocket?.close(); } catch { }
+                    remoteWriter = remoteReader = remoteSocket = null;
+                    
+                    if (!isCFError(err) || i === attempts.length - 1) {
+                        throw err;
+                    }
                 }
             }
-            try {
-                remoteSocket = connect({
-                    hostname: attemptHost,
-                    port: attemptPort
-                });
-                if (remoteSocket.opened) await remoteSocket.opened;
-                remoteWriter = remoteSocket.writable.getWriter();
-                remoteReader = remoteSocket.readable.getReader();
-                if (firstFrameData) {
-                    await remoteWriter.write(encoder.encode(firstFrameData));
-                }
-                webSocket.send('CONNECTED');
-                pumpRemoteToWebSocket();
-                return;
-            } catch (err) {
-                try { remoteWriter?.releaseLock(); } catch { }
-                try { remoteReader?.releaseLock(); } catch { }
-                try { remoteSocket?.close(); } catch { }
-                remoteWriter = remoteReader = remoteSocket = null;
-                if (!isCFError(err) || i === attempts.length - 1) {
-                    throw err;
-                }
-            }
+        } catch (err) {
+            isConnecting = false;
+            throw err;
         }
     };
+
     webSocket.addEventListener('message', async (event) => {
         if (isClosed) return;
+        
         try {
             const data = event.data;
             if (typeof data === 'string') {
@@ -138,6 +194,11 @@ async function handleSession(webSocket) {
                     const targetAddr = parts[0].substring(8);
                     const firstFrameData = parts[1] || '';
                     const proxyIP = parts[2] || '';
+                    
+                    if (!targetAddr) {
+                        throw new Error('无效的目标地址');
+                    }
+                    
                     await connectToRemote(targetAddr, firstFrameData, proxyIP);
                 }
                 else if (data.startsWith('DATA:')) {
@@ -157,6 +218,7 @@ async function handleSession(webSocket) {
             cleanup();
         }
     });
+
     webSocket.addEventListener('close', cleanup);
     webSocket.addEventListener('error', cleanup);
 }
