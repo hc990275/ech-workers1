@@ -35,19 +35,20 @@ func (c *WebSocketClient) ParseServerAddr() (host, port, path string, err error)
 	}
 
 	path = "/"
-	slashIdx := strings.Index(c.serverAddr, "/")
+	addr := c.serverAddr
+	slashIdx := strings.Index(addr, "/")
 	if slashIdx != -1 {
-		if slashIdx < len(c.serverAddr) {
-			path = c.serverAddr[slashIdx:]
+		if slashIdx < len(addr) {
+			path = addr[slashIdx:]
 		}
-		c.serverAddr = c.serverAddr[:slashIdx]
+		addr = addr[:slashIdx]
 	}
 
-	if c.serverAddr == "" {
+	if addr == "" {
 		return "", "", "", errors.New("服务器地址格式错误")
 	}
 
-	host, port, err = net.SplitHostPort(c.serverAddr)
+	host, port, err = net.SplitHostPort(addr)
 	if err != nil || host == "" || port == "" {
 		return "", "", "", fmt.Errorf("无效的服务器地址格式: %v", err)
 	}
