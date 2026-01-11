@@ -21,7 +21,7 @@ Usage of ech-win:
         身份验证令牌
 ```
 ##### 注：workers、pages、snippets三种部署都支持, TOKEN=xxx 部署时请更换
-##### 如果需要GUI界面，从 [https://github.com/duquancai/ech-workers-client](https://github.com/duquancai/ech-workers-client) 仓库下载最新版本：ech-win-gui.exe与ech-win.exe存放于一个文件夹内。
+##### 如果需要GUI界面，从 [https://github.com/duquancai/ech-workers-client](https://github.com/duquancai/ech-workers-client) 仓库下载最新版本的ech-win-gui.exe，并与本仓库的ech-win.exe存放于一个文件夹内。
 
 ### 🛠 开源代码引用
 - [https://github.com/hhsw2015/ech-workers](https://github.com/hhsw2015/ech-workers)
